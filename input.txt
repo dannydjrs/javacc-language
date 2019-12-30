@@ -1,0 +1,5 @@
+DEF INC x { x+1 } ;
+DEF TIMESTWO x { x*2 } ;
+DEF SQUARE x { x*x } ;
+DEF ADDTEN x { ADDTEN(x) } ;
+DEF MAIN { SQUARE(TIMESTWO(10)) } ;
