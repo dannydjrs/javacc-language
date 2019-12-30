@@ -1,0 +1,428 @@
+options {
+	STATIC = false;
+	LOOKAHEAD = 2;
+	FORCE_LA_CHECK = true;
+}
+
+PARSER_BEGIN(Grammar)
+
+import java.io.PrintStream;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.Arrays;
+import java.lang.*;
+
+public class Grammar {
+	public static void main( String[] args ) {
+		Grammar parser = new Grammar( System.in );
+		// map to store functions and their tree of operations
+		Map<String, Expression> functions = new HashMap<String, Expression>();
+
+		try {
+			parser.Start(functions);
+			// if it passes the lexer
+			System.out.println("PASS");
+			// interpret the output, starting at the main function.
+			System.out.println(functions.get("MAIN").interpret(functions, -1));
+		} catch(StackOverflowError e) {
+	    	System.out.println("Divergence");} catch(Exception ex) {
+			System.out.println("FAIL");
+			System.err.println(ex.getMessage());
+			System.exit(0);
+		}
+	}
+}
+// Each expression must have a method to interpret it's value
+interface Expression {
+	public int interpret(final Map<String, Expression> functions, int var) throws RuntimeException;
+}
+
+// Expression using the '+' operator
+class AdditiveExpression implements Expression {
+	Expression leftOp;
+	Expression rightOp;
+
+	public AdditiveExpression(Expression leftOp, Expression rightOp) {
+		this.leftOp = leftOp;
+		this.rightOp = rightOp;
+	}
+
+	public int interpret(final Map<String, Expression> functions, int var) throws RuntimeException {
+		// check if an '+' operation was actually used
+		// Due the precedence check, it will force it as an add operation even if
+		// if is only a number
+		if (rightOp != null) {
+			return leftOp.interpret(functions, var) + rightOp.interpret(functions, var);
+		} else {
+			return leftOp.interpret(functions, var);
+		}
+	}
+}
+// Expressions using the '*' operation
+class MultiplicativeExpression implements Expression {
+	Expression leftOp;
+	Expression rightOp;
+
+	public MultiplicativeExpression(Expression leftOp, Expression rightOp) {
+		this.leftOp = leftOp;
+		this.rightOp = rightOp;
+	}
+
+	public int interpret(final Map<String, Expression> functions, int var) throws RuntimeException {
+		if (rightOp != null) {
+			return leftOp.interpret(functions, var) * rightOp.interpret(functions, var);
+		} else {
+			return leftOp.interpret(functions, var);
+		}
+	}
+}
+// if a variable is used such as 'x'
+class VariableExpression implements Expression {
+	String name;
+
+	public VariableExpression(final String name) {
+		this.name = name;
+	}
+
+	public int interpret(final Map<String, Expression> functions, int var) throws RuntimeException {
+		return var;
+	}
+}
+
+// if a function is called such as 'INC(...)'
+class FunctionExpression implements Expression {
+	String name;
+	Expression param;
+
+	public FunctionExpression(final String name, Expression param) {
+		this.name = name;
+		this.param = param;
+	}
+
+	public int interpret(final Map<String, Expression> functions, int var) throws RuntimeException {
+		// checks if the function called actually exists
+		if (functions.get(name) == null) {
+			throw new RuntimeException(
+				"(Exception 6): \n" +
+				"\t- Call to '" + name + "' but it hasn't been defined"
+			);
+		};
+		// result of the expression in the brackets, with the parameter
+		int v = param.interpret(functions, var);
+		return functions.get(name).interpret(functions, v);
+	}
+}
+
+// if a number is used such as '8'
+class NumberExpression implements Expression {
+	int value;
+
+	public NumberExpression(final int value) {
+		this.value = value;
+	}
+
+	public int interpret(final Map<String, Expression> functions, int var) {
+		return value;
+	}
+}
+
+PARSER_END(Grammar)
+
+/* End Of Line tokens */
+TOKEN:
+{
+	< EOL :
+		"\n"
+	|	"\r"
+	| 	"\r\n"
+	>
+}
+
+
+/* KEYWORDS */
+TOKEN :
+{
+  	< DEF: "DEF" >
+|	< MAIN: "MAIN" >
+}
+
+/* SYMBOLS */
+TOKEN :
+{
+	< PLUS: "+">
+|	< MUL: "*" >
+}
+
+/* LITERALS */
+TOKEN :
+{
+  < INTEGER_LITERAL: ["1"-"9"] (["0"-"9"])* | "0" >
+}
+
+/* IDENTIFIERS */
+TOKEN :
+{
+  < FUN_IDENTIFIER: <UPPER_LETTER> (<UPPER_LETTER>)* >
+|	< PARAM_IDENTIFIER: <LOWER_LETTER> (<LOWER_LETTER>)* >
+|	< #UPPER_LETTER: ["A"-"Z"] >
+|	< #LOWER_LETTER: ["a"-"z"] >
+}
+
+void Start(final Map<String, Expression> functions): {}
+{
+	// Can be multiple declarations of functions
+	// Each have to be on a new line
+	(
+		FunctionDeclaration(functions)
+		<EOL>
+	)*
+	<EOF>
+	// If MAIN hasn't been defined then throw error
+	{
+		if (functions.get("MAIN") == null) {
+			throw new ParseException(
+			"(Exception 8) At " + getToken(1).beginLine + ":" + getToken(1).beginColumn + "\n" +
+			"\t- 'MAIN' function not defined in program!\n"
+			);
+		}
+	}
+}
+
+void FunctionDeclaration(final Map<String, Expression> functions):
+{
+	String name;
+	String param;
+	Expression expr;
+}
+{
+	// Must start with DEF keyword
+	< DEF >
+	" "
+	// Can be any function name or the MAIN keyword
+	(
+		name=FunctionName()
+		" "
+		// If it a function (not main) then it must define a parameter
+		(
+			param=ParamDefine()
+			" "
+		|
+			{
+				throw new ParseException(
+				"(Exception 2) At " + getToken(1).beginLine + ":" + getToken(1).beginColumn + "\n" +
+				"\t- Parameter names must be lower case strings"
+				);
+			}
+		)
+	|
+		< MAIN >
+		" "
+		{
+			name="MAIN";
+			param = null;
+		}
+	|
+		{
+			throw new ParseException(
+				"(Exception 1) At " + getToken(1).beginLine + ":" + getToken(1).beginColumn + "\n" +
+				"\t- Function names must be upper case strings"
+			);
+		}
+	)
+	// the body of the function enclosed by curly brackets
+	"{"
+	expr=Body(param)
+	"} ;"
+	{
+		{
+			// if the function defined has not already been defined
+			// then add it
+			// otherwise throw an error as it has been defined more than once
+			if (functions.get(name) == null) {
+				functions.put(name, expr);
+			} else {
+				throw new ParseException(
+				"(Exception 8) At " + getToken(1).beginLine + ":" + getToken(1).beginColumn + "\n" +
+				"\t- '" + name + "' is defined more than once!"
+				);
+			}
+		}
+	}
+}
+// Function name must be upper case string
+String FunctionName():
+{
+	Token token;
+}
+{
+  token=< FUN_IDENTIFIER >
+	{
+		return token.image.toString();
+	}
+}
+// Parameter name must be lower case string
+String ParamDefine():
+{
+	Token token;
+}
+{
+	token=< PARAM_IDENTIFIER >
+	{
+		return token.image.toString();
+	}
+}
+
+// Simple Math Operations in body
+Expression Body(String param):
+{
+	Expression expr = null;
+}
+{
+	(
+		" "
+	|
+		{
+			throw new ParseException(
+			"(Exception 4) At " + getToken(1).beginLine + ":" + getToken(1).beginColumn + "\n" +
+			"\t- Body of function must be separated by whitespace on both sides"
+			);
+		}
+	)
+	// additive expression specified first,
+	// to give add operation precedence over multply
+  expr=AdditiveExpression(param)
+	(
+		" "
+	|
+		{
+			throw new ParseException(
+			"(Exception 4) At " + getToken(1).beginLine + ":" + getToken(1).beginColumn + "\n" +
+			"\t- Body of function must be separated by whitespace on both sides"
+			);
+		}
+	)
+	{
+		return expr;
+	}
+}
+/**
+ * Used for a grammer of a addition expression
+ * @return Returns a AdditiveExpression
+ */
+Expression AdditiveExpression(String param):
+{
+	Expression left = null;
+	Expression right = null;
+}
+{
+	// An add operation may be any number of multiply Operations
+	// on either side of the '+'
+  left=MultiplicativeExpression(param) ( "+"
+	right=MultiplicativeExpression(param) )*
+	{
+		return new AdditiveExpression(left, right);
+	}
+}
+
+/**
+ * Used for a grammer of a multiply expression
+ * @return Returns a MultiplyExpression
+ */
+Expression MultiplicativeExpression(String param):
+{
+	Expression left = null;
+	Expression right = null;
+}
+{
+	// a multiply operation may be any number of unary expressions
+	// on either side of the '*'
+  left=UnaryExpression(param) ( "*"
+	right=UnaryExpression(param) )*
+	{
+		return new MultiplicativeExpression(left, right);
+	}
+}
+
+/**
+ * Used for a grammer of a single operator
+ * @return Returns a Variable/Number/Function expression
+ */
+Expression UnaryExpression(String param):
+{
+	Expression expr;
+	Token token;
+	String name;
+}
+{
+	// Any unary expression can have '+' before to signify it's positive
+	// Done to show how easy negative numbers could be included simply
+	(
+		"+"
+		(
+			token=< INTEGER_LITERAL >
+			{
+				return new NumberExpression(Integer.parseInt(token.image.toString()));
+			}
+		|
+			token=< PARAM_IDENTIFIER >
+			{
+				if (token.image.toString().equals(param)) {
+					return new VariableExpression(param);
+				} else {
+					throw new ParseException (
+						"(Exception 7) At " + getToken(1).beginLine + ":" + getToken(1).beginColumn + "\n" +
+						"\t- Parameter '" + token.image.toString() + "' defined but not instantiated"
+					);
+				}
+			}
+		|
+			name=FunctionName() "(" expr=AdditiveExpression(param) ")"
+			{
+				return new FunctionExpression(name, expr);
+			}
+		)
+	)
+	|
+	// Without a '+' sign
+	(
+		(
+			token=< INTEGER_LITERAL >
+			{
+				return new NumberExpression(Integer.parseInt(token.image.toString()));
+			}
+		|
+			token=< PARAM_IDENTIFIER >
+			{
+				if (token.image.toString().equals(param)) {
+					return new VariableExpression(param);
+				} else {
+					throw new ParseException(
+						"(Exception 7) At " + getToken(1).beginLine + ":" + getToken(1).beginColumn + "\n" +
+						"\t- Parameter '" + token.image.toString() + "' defined but not instantiated"
+					);
+				}
+			}
+		|
+			name=FunctionName() "(" expr=AdditiveExpression(param) ")"
+			{
+				return new FunctionExpression(name, expr);
+			}
+		)
+	)
+	|
+	< MAIN >
+	{
+		throw new ParseException(
+			"(Exception 7) At " + getToken(1).beginLine + ":" + getToken(1).beginColumn + "\n" +
+			"\t- 'MAIN' function cannot be called"
+		);
+	}
+	|
+	"("
+	{
+		throw new ParseException(
+			"(Exception 5) At " + getToken(1).beginLine + ":" + getToken(1).beginColumn + "\n" +
+			"\t- Parentheses not allowed except for function calls"
+		);
+	}
+}
